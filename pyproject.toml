@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textual-widgets"
+version = "0.1.0"
+description = "A collection of reusable Textual TUI widgets"
+requires-python = ">=3.11"
+dependencies = ["textual>=0.40.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["textual_widgets*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
