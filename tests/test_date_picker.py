@@ -10,8 +10,8 @@ import datetime
 import pytest
 from textual.app import App, ComposeResult
 
-from textual_widgets import DatePicker
-from textual_widgets.date_picker import _CalendarView, _clamp_to_month, _iso_week
+from textual_widgets import CalendarView, DatePicker
+from textual_widgets.date_picker import _clamp_to_month, _iso_week
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +65,12 @@ def _make_picker_app(initial: str) -> App:
 
 @pytest.mark.asyncio
 async def test_calendar_view_has_positive_height():
-    """The _CalendarView must render with a non-zero content height."""
+    """The CalendarView must render with a non-zero content height."""
     app = _make_picker_app("2026-04-15")
     async with app.run_test() as pilot:
         await pilot.pause()
-        view = app.query_one(_CalendarView)
+        await pilot.pause()
+        view = app.query_one(CalendarView)
         assert view.content_size.height > 0
 
 
@@ -79,7 +80,7 @@ async def test_calendar_view_is_focused_on_open():
     app = _make_picker_app("2026-04-15")
     async with app.run_test() as pilot:
         await pilot.pause()
-        view = app.query_one(_CalendarView)
+        view = app.query_one(CalendarView)
         assert view.has_focus
 
 

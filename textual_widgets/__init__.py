@@ -18,6 +18,6 @@ DatePicker
 """
 
 from textual_widgets.editable_table import EditableDataTable
-from textual_widgets.date_picker import DatePicker
+from textual_widgets.date_picker import CalendarView, DatePicker
 
-__all__ = ["EditableDataTable", "DatePicker"]
+__all__ = ["EditableDataTable", "CalendarView", "DatePicker"]

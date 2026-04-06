@@ -1,37 +1,55 @@
 """
-DatePicker — a modal calendar widget for Textual.
+CalendarView and DatePicker widgets for Textual.
 
-Usage
------
-Push the screen and await the result::
+CalendarView — embeddable calendar widget
+------------------------------------------
+Can be used inline (composed directly into an app or screen) or inside the
+DatePicker modal.  Posts messages when the user confirms or cancels::
 
-    date = await self.app.push_screen_wait(DatePicker())
-    date = await self.app.push_screen_wait(DatePicker(initial="2026-04-15"))
+    class MyApp(App):
+        def compose(self):
+            yield CalendarView(id="cal")
 
-Returns a ``"YYYY-MM-DD"`` string, or ``None`` if the user pressed Escape.
+        def on_calendar_view_date_selected(self, event):
+            print(event.date)   # "YYYY-MM-DD"
+
+        def on_calendar_view_cancelled(self, event):
+            pass  # user pressed Escape
+
+    # To activate the calendar from a key binding:
+    def action_edit_date(self):
+        cal = self.query_one(CalendarView)
+        cal.set_date("2026-04-15")   # optional pre-fill
+        cal.focus()
+
+DatePicker — modal wrapper
+---------------------------
+Push with push_screen and a callback::
+
+    self.push_screen(DatePicker(initial="2026-04-15"), callback=self._on_date)
+
+    def _on_date(self, result):
+        if result:          # "YYYY-MM-DD" or None
+            ...
 
 Calendar display::
 
     <  Apr,2026  >
-    Wk    Mo    Tu    We    Th    Fr    Sa    Su
-    13    30    31    1     2     3     4     5
-    14    6     7     8     9     10    11    12
-    15    13    14    15    16    17    18    19
-    16    20    21    22    23    24    25    26
-    17    27    28    29    30    1     2     3
-    18    4     5     6     7     8     9     10
+    Wk  Mo  Tu  We  Th  Fr  Sa  Su
+    13  30  31  1   2   3   4   5
+    ...
 
-Keyboard navigation
--------------------
+Keyboard (when CalendarView is focused)
+---------------------------------------
 - ``←`` / ``→``  — previous / next day
 - ``↑`` / ``↓``  — previous / next week
 - ``[`` / ``]``  — previous / next month (cursor clamped to last day if needed)
 - ``Enter``      — confirm selected date
-- ``Escape``     — cancel (returns None)
+- ``Escape``     — cancel
 
 Mouse
 -----
-- Click a day to select and confirm it immediately.
+- Click a day to confirm it immediately.
 - Click the left half of the header to go to the previous month.
 - Click the right half of the header to go to the next month.
 """
@@ -44,10 +62,11 @@ import datetime
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widget import Widget
 
-__all__ = ["DatePicker"]
+__all__ = ["CalendarView", "DatePicker"]
 
 
 # ---------------------------------------------------------------------------
@@ -76,14 +95,30 @@ def _clamp_to_month(year: int, month: int, day: int) -> datetime.date:
 
 
 # ---------------------------------------------------------------------------
-# Internal calendar widget
+# CalendarView — public embeddable widget
 # ---------------------------------------------------------------------------
 
-class _CalendarView(Widget, can_focus=True):
+class CalendarView(Widget, can_focus=True):
     """
-    Renders a month calendar and handles keyboard/mouse interaction.
-    Calls ``self.screen.dismiss(date_str)`` when a date is confirmed.
+    An embeddable calendar widget.
+
+    When focused it accepts keyboard and mouse input.  Posts
+    ``CalendarView.DateSelected`` when a date is confirmed and
+    ``CalendarView.Cancelled`` when Escape is pressed.
     """
+
+    # ---------------------------------------------------------------- messages
+
+    class DateSelected(Message):
+        """Posted when the user confirms a date."""
+        def __init__(self, date: str) -> None:
+            self.date = date   # "YYYY-MM-DD"
+            super().__init__()
+
+    class Cancelled(Message):
+        """Posted when the user presses Escape."""
+
+    # ---------------------------------------------------------------- bindings
 
     BINDINGS = [
         Binding("left",   "prev_day",   show=False),
@@ -99,20 +134,43 @@ class _CalendarView(Widget, can_focus=True):
     # Each column (Wk + 7 day columns) is this many characters wide.
     COL_W = 4
 
-    def __init__(self, initial: datetime.date) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        initial: str | None = None,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes)
         self._today  = datetime.date.today()
-        self._cursor = initial
-        self._month  = initial.replace(day=1)
+        start        = self._parse(initial) or self._today
+        self._cursor = start
+        self._month  = start.replace(day=1)
+
+    # ---------------------------------------------------------------- public API
+
+    def set_date(self, date_str: str | None) -> None:
+        """Update the highlighted date without posting a message."""
+        d = self._parse(date_str)
+        if d:
+            self._cursor = d
+            self._month  = d.replace(day=1)
+            self.refresh()
 
     # ---------------------------------------------------------------- grid
 
+    @staticmethod
+    def _parse(s: str | None) -> datetime.date | None:
+        if not s:
+            return None
+        try:
+            return datetime.date.fromisoformat(str(s))
+        except (ValueError, TypeError):
+            return None
+
     def _build_grid(self) -> list[list[datetime.date]]:
-        """
-        Return 6 complete Mon–Sun weeks that cover the current month.
-        Weeks that spill into adjacent months are included.
-        """
-        cal   = calendar.Calendar(firstweekday=0)  # Monday first
+        """6 rows × 7 cols (Mon–Sun), including days from adjacent months."""
+        cal   = calendar.Calendar(firstweekday=0)
         weeks = cal.monthdatescalendar(self._month.year, self._month.month)
         while len(weeks) < 6:
             last_day = weeks[-1][-1]
@@ -129,14 +187,13 @@ class _CalendarView(Widget, can_focus=True):
         year  = self._month.year
         month = self._month.month
         mname = self._month.strftime("%b")
-        total = cw * 8  # total character width
+        total = cw * 8
 
         lines: list[Text] = []
 
-        # Month navigation header — centred
+        # Month navigation header
         hdr_str = f"<  {mname},{year}  >"
-        header  = Text(hdr_str.center(total), style="bold #5E8B87")
-        lines.append(header)
+        lines.append(Text(hdr_str.center(total), style="bold #5E8B87"))
 
         # Day-name header
         day_names = Text()
@@ -182,7 +239,6 @@ class _CalendarView(Widget, can_focus=True):
     # ---------------------------------------------------------------- actions
 
     def _sync_month(self) -> None:
-        """Keep the viewed month in sync with the cursor after day navigation."""
         self._month = self._cursor.replace(day=1)
 
     def action_prev_day(self) -> None:
@@ -206,32 +262,31 @@ class _CalendarView(Widget, can_focus=True):
         self.refresh()
 
     def action_prev_month(self) -> None:
-        new_first     = _first_of_prev(self._month)
-        self._month   = new_first
-        self._cursor  = _clamp_to_month(new_first.year, new_first.month, self._cursor.day)
+        new_first    = _first_of_prev(self._month)
+        self._month  = new_first
+        self._cursor = _clamp_to_month(new_first.year, new_first.month, self._cursor.day)
         self.refresh()
 
     def action_next_month(self) -> None:
-        new_first     = _first_of_next(self._month)
-        self._month   = new_first
-        self._cursor  = _clamp_to_month(new_first.year, new_first.month, self._cursor.day)
+        new_first    = _first_of_next(self._month)
+        self._month  = new_first
+        self._cursor = _clamp_to_month(new_first.year, new_first.month, self._cursor.day)
         self.refresh()
 
     def action_select(self) -> None:
-        self.screen.dismiss(self._cursor.strftime("%Y-%m-%d"))
+        self.post_message(self.DateSelected(self._cursor.strftime("%Y-%m-%d")))
 
     def action_cancel(self) -> None:
-        self.screen.dismiss(None)
+        self.post_message(self.Cancelled())
 
     # ---------------------------------------------------------------- mouse
 
     def on_click(self, event) -> None:
         cw      = self.COL_W
-        col_idx = event.x // cw   # 0 = Wk column, 1‒7 = Mon–Sun
-        row_idx = event.y          # 0 = month header, 1 = day names, 2‒7 = weeks
+        col_idx = event.x // cw
+        row_idx = event.y
 
         if row_idx == 0:
-            # Header: left half → previous month, right half → next month
             if event.x < (cw * 8) // 2:
                 self.action_prev_month()
             else:
@@ -239,12 +294,12 @@ class _CalendarView(Widget, can_focus=True):
             return
 
         if row_idx == 1 or col_idx == 0:
-            return  # day-name header row or week-number column
+            return
 
-        day_col  = col_idx - 1   # 0 = Monday … 6 = Sunday
+        day_col  = col_idx - 1
         week_idx = row_idx - 2
+        grid     = self._build_grid()
 
-        grid = self._build_grid()
         if week_idx >= len(grid) or day_col > 6:
             return
 
@@ -252,30 +307,30 @@ class _CalendarView(Widget, can_focus=True):
         self._cursor = clicked
         self._month  = clicked.replace(day=1)
         self.refresh()
-        self.screen.dismiss(self._cursor.strftime("%Y-%m-%d"))
+        self.post_message(self.DateSelected(self._cursor.strftime("%Y-%m-%d")))
 
 
 # ---------------------------------------------------------------------------
-# Public modal screen
+# DatePicker — modal wrapper around CalendarView
 # ---------------------------------------------------------------------------
 
 class DatePicker(ModalScreen):
     """
     Modal calendar date picker.
 
-    Push with ``push_screen_wait`` and await the result::
+    Push with ``push_screen`` and a callback::
 
-        date = await self.app.push_screen_wait(DatePicker())
-        date = await self.app.push_screen_wait(DatePicker(initial="2026-04-15"))
+        self.push_screen(DatePicker(initial="2026-04-15"), callback=self._on_date)
 
-    Returns a ``"YYYY-MM-DD"`` string, or ``None`` if Escape was pressed.
+        def _on_date(self, result):
+            if result:   # "YYYY-MM-DD" or None
+                ...
     """
 
     DEFAULT_CSS = """
     DatePicker {
         align: center middle;
     }
-
     DatePicker > Vertical {
         width: auto;
         height: auto;
@@ -283,8 +338,7 @@ class DatePicker(ModalScreen):
         border: solid #5E8B87;
         padding: 1 2;
     }
-
-    _CalendarView {
+    DatePicker CalendarView {
         width: auto;
         height: auto;
     }
@@ -298,17 +352,17 @@ class DatePicker(ModalScreen):
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
-        if initial:
-            try:
-                self._initial = datetime.date.fromisoformat(initial)
-            except (ValueError, TypeError):
-                self._initial = datetime.date.today()
-        else:
-            self._initial = datetime.date.today()
+        self._initial = initial
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield _CalendarView(initial=self._initial)
+            yield CalendarView(initial=self._initial)
 
     def on_mount(self) -> None:
-        self.query_one(_CalendarView).focus()
+        self.query_one(CalendarView).focus()
+
+    def on_calendar_view_date_selected(self, event: CalendarView.DateSelected) -> None:
+        self.dismiss(event.date)
+
+    def on_calendar_view_cancelled(self, event: CalendarView.Cancelled) -> None:
+        self.dismiss(None)
