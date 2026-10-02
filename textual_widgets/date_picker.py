@@ -147,7 +147,26 @@ class CalendarView(Widget, can_focus=True):
         self._cursor = start
         self._month  = start.replace(day=1)
 
+    def on_mount(self) -> None:
+        # Keep the "today" highlight correct when the app runs past midnight.
+        self.set_interval(60, self.refresh_today)
+
     # ---------------------------------------------------------------- public API
+
+    def refresh_today(self) -> None:
+        """Re-read the system date; if it changed, move the today highlight.
+
+        If the cursor is still sitting on the old "today" (i.e. the user has
+        not picked another date), it follows to the new day as well.
+        """
+        today = datetime.date.today()
+        if today == self._today:
+            return
+        old, self._today = self._today, today
+        if self._cursor == old:
+            self._cursor = today
+            self._sync_month()
+        self.refresh()
 
     def set_date(self, date_str: str | None) -> None:
         """Update the highlighted date without posting a message."""
